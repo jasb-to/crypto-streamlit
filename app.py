@@ -5,7 +5,7 @@ import altair as alt
 import numpy as np
 import itertools
 
-# --- Fetch CoinGecko OHLCV ---
+# --- Fetch OHLCV data from CoinGecko ---
 def get_coingecko_ohlcv(coin_id, vs_currency="usd"):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     params = {"vs_currency": vs_currency, "days": "max", "interval": "daily"}
@@ -18,7 +18,7 @@ def get_coingecko_ohlcv(coin_id, vs_currency="usd"):
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df
 
-# --- Momentum + Probability Signals ---
+# --- Momentum + probability trading signals ---
 def add_signals(df, window=5, buy_thr=0.6, sell_thr=0.4):
     df = df.copy()
     df["return"] = df["price"].pct_change()
@@ -26,11 +26,11 @@ def add_signals(df, window=5, buy_thr=0.6, sell_thr=0.4):
     df["prob_up"] = 1 / (1 + np.exp(-10 * df["momentum"].fillna(0)))
 
     df["signal"] = 0
-    df.loc[df["prob_up"] > buy_thr, "signal"] = 1
-    df.loc[df["prob_up"] < sell_thr, "signal"] = -1
+    df.loc[df["prob_up"] > buy_thr, "signal"] = 1   # Buy
+    df.loc[df["prob_up"] < sell_thr, "signal"] = -1  # Sell
     return df
 
-# --- Backtesting ---
+# --- Backtest strategy ---
 def backtest(df):
     df = df.copy()
     df["next_return"] = df["price"].pct_change().shift(-1)
@@ -52,7 +52,7 @@ def backtest(df):
     }
     return summary, df
 
-# --- Automatic Parameter Tuning ---
+# --- Auto-tune parameters ---
 def tune_parameters(df, window_range=range(3,21), buy_range=np.arange(0.55,0.76,0.05), sell_range=np.arange(0.25,0.46,0.05)):
     best_params = None
     best_return = -np.inf
@@ -77,26 +77,27 @@ def tune_parameters(df, window_range=range(3,21), buy_range=np.arange(0.55,0.76,
     return best_params, best_return
 
 # --- Streamlit UI ---
-st.title("AI16Z & ADA Trading Signals with Backtest & Auto-Tuning")
+st.title("AI16Z & ADA Trading Signals (Auto-Tuned Strategy)")
 
 coin_choice = st.selectbox(
     "Choose a coin:",
     {"Cardano (ADA/USDT)": "cardano", "AI16Z (AI16Z/USDT)": "ai16z"}
 )
 
+# Load data
 df = get_coingecko_ohlcv(coin_choice)
 
 # Auto-tune parameters
-st.subheader("Optimizing Strategy Parameters...")
+st.subheader("Optimizing strategy parameters...")
 best_params, best_return = tune_parameters(df)
-st.write("**Optimal parameters found:**", best_params)
+st.write("**Best parameters found:**", best_params)
 st.write(f"Cumulative return with these parameters: {best_return:.2f}x")
 
 # Apply best parameters
 df = add_signals(df, window=best_params["window"], buy_thr=best_params["buy_thr"], sell_thr=best_params["sell_thr"])
 summary, df = backtest(df)
 
-st.write(f"Showing last rows of **{coin_choice}** data:")
+st.subheader(f"Data for {coin_choice}")
 st.write(df.tail())
 
 # --- Price chart with buy/sell markers ---
