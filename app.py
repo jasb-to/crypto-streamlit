@@ -5,27 +5,25 @@ import altair as alt
 import numpy as np
 import itertools
 
-# --- Fetch OHLCV data from CoinGecko ---
-def get_coingecko_ohlcv(coin_id, vs_currency="usd"):
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    params = {"vs_currency": vs_currency, "days": "max", "interval": "daily"}
-    response = requests.get(url, params=params)
+# --- Fetch OHLCV data from CoinPaprika ---
+def get_coinpaprika_ohlcv(coin_id, quote="usd"):
+    url = f"https://api.coinpaprika.com/v1/coins/{coin_id}/ohlcv/historical"
+    params = {"start": "2015-01-01", "end": pd.Timestamp.today().strftime("%Y-%m-%d"), "quote": quote}
 
+    response = requests.get(url, params=params)
     if response.status_code != 200:
-        st.error(f"Error fetching {coin_id} from CoinGecko: {response.status_code}")
+        st.error(f"Error fetching {coin_id} from CoinPaprika: {response.status_code}")
         return pd.DataFrame()
 
     data = response.json()
-    if "prices" not in data:
-        st.error(f"No price data found for {coin_id}.")
+    if not data:
+        st.error(f"No OHLCV data found for {coin_id}.")
         return pd.DataFrame()
 
-    prices = data["prices"]
-    volumes = data["total_volumes"]
-    df = pd.DataFrame(prices, columns=["timestamp", "price"])
-    df["volume"] = [v[1] for v in volumes]
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    return df
+    df = pd.DataFrame(data)
+    df["time_open"] = pd.to_datetime(df["time_open"])
+    df.rename(columns={"close": "price", "volume": "volume"}, inplace=True)
+    return df[["time_open", "price", "volume"]]
 
 # --- Momentum + probability trading signals ---
 def add_signals(df, window=5, buy_thr=0.6, sell_thr=0.4):
@@ -35,8 +33,8 @@ def add_signals(df, window=5, buy_thr=0.6, sell_thr=0.4):
     df["prob_up"] = 1 / (1 + np.exp(-10 * df["momentum"].fillna(0)))
 
     df["signal"] = 0
-    df.loc[df["prob_up"] > buy_thr, "signal"] = 1   # Buy
-    df.loc[df["prob_up"] < sell_thr, "signal"] = -1  # Sell
+    df.loc[df["prob_up"] > buy_thr, "signal"] = 1
+    df.loc[df["prob_up"] < sell_thr, "signal"] = -1
     return df
 
 # --- Backtest strategy ---
@@ -86,18 +84,18 @@ def tune_parameters(df, window_range=range(3,21), buy_range=np.arange(0.55,0.76,
     return best_params, best_return
 
 # --- Streamlit UI ---
-st.title("AI16Z & ADA Trading Signals (Auto-Tuned Strategy)")
+st.title("AI16Z & ADA Trading Signals (CoinPaprika Data)")
 
 coin_options = {
-    "Cardano (ADA/USDT)": "cardano",
-    "AI16Z (AI16Z/USDT)": "ai16z"
+    "Cardano (ADA/USDT)": "ada-cardano",
+    "AI16Z (AI16Z/USDT)": "ai16z-ai16z"
 }
 
 selected_label = st.selectbox("Choose a coin:", list(coin_options.keys()))
-coin_choice = coin_options[selected_label]  # maps label -> API id
+coin_choice = coin_options[selected_label]
 
 # Load data
-df = get_coingecko_ohlcv(coin_choice)
+df = get_coinpaprika_ohlcv(coin_choice)
 
 if df.empty:
     st.warning("No data available for this coin.")
@@ -116,7 +114,7 @@ else:
     st.write(df.tail())
 
     # --- Price chart with buy/sell markers ---
-    base = alt.Chart(df).encode(x="timestamp:T")
+    base = alt.Chart(df).encode(x="time_open:T")
     price_line = base.mark_line().encode(y="price:Q")
     buy_markers = base.mark_point(color="green", size=80).encode(y="price:Q").transform_filter("datum.signal == 1")
     sell_markers = base.mark_point(color="red", size=80).encode(y="price:Q").transform_filter("datum.signal == -1")
@@ -124,11 +122,11 @@ else:
     st.altair_chart(price_chart, use_container_width=True)
 
     # --- Probability chart ---
-    prob_chart = alt.Chart(df).mark_line(color="blue").encode(x="timestamp:T", y="prob_up:Q").properties(title="Probability of Next-Day Positive Return")
+    prob_chart = alt.Chart(df).mark_line(color="blue").encode(x="time_open:T", y="prob_up:Q").properties(title="Probability of Next-Day Positive Return")
     st.altair_chart(prob_chart, use_container_width=True)
 
     # --- Cumulative returns chart ---
-    cum_chart = alt.Chart(df).mark_line(color="purple").encode(x="timestamp:T", y="cumulative:Q").properties(title="Cumulative Strategy Returns")
+    cum_chart = alt.Chart(df).mark_line(color="purple").encode(x="time_open:T", y="cumulative:Q").properties(title="Cumulative Strategy Returns")
     st.altair_chart(cum_chart, use_container_width=True)
 
     # --- Backtest summary ---
