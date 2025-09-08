@@ -2,59 +2,70 @@ import streamlit as st
 import requests
 import pandas as pd
 import altair as alt
+import numpy as np
 
-# Function to fetch data from Moralis
-def fetch_moralis_data(address, chain, from_timestamp, to_timestamp, interval):
-    url = f"https://api.moralis.io/v1/ohlcv"
-    params = {
-        "address": address,
-        "chain": chain,
-        "from": from_timestamp,
-        "to": to_timestamp,
-        "interval": interval
-    }
-    headers = {"X-API-Key": "YOUR_MORALIS_API_KEY"}
-    response = requests.get(url, params=params, headers=headers)
-    return response.json()
+st.title("AI16Z & ADA Trading Signals (CoinGecko Free API)")
 
-# Function to fetch data from Syve
-def fetch_syve_data(token, chain, from_timestamp, to_timestamp, interval):
-    url = f"https://api.syve.ai/v1/price/historical/ohlc"
-    params = {
-        "token": token,
-        "chain": chain,
-        "from": from_timestamp,
-        "to": to_timestamp,
-        "interval": interval
-    }
-    headers = {"Authorization": "Bearer YOUR_SYVE_API_KEY"}
-    response = requests.get(url, params=params, headers=headers)
-    return response.json()
+# --- Config ---
+COINS = {
+    "AI16Z": "ai16z",
+    "ADA": "cardano"
+}
+SELECTED_COIN = "AI16Z"  # change to "ADA" if desired
 
-# Streamlit UI
-st.title("Crypto OHLCV Data Fetcher")
+# --- Fetch OHLCV from CoinGecko ---
+def fetch_coingecko_data(coin_id):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": "max", "interval": "daily"}
+    response = requests.get(url, params=params)
+    if response.status_code != 200:
+        st.error(f"Error fetching {coin_id}: {response.status_code}")
+        return pd.DataFrame()
+    data = response.json()
+    if "prices" not in data:
+        st.error(f"No price data for {coin_id}")
+        return pd.DataFrame()
+    df = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
+    df["volume"] = [v[1] for v in data.get("total_volumes", [[0,0]]*len(df))]
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    return df
 
-token = st.selectbox("Select Token", ["AI16Z", "ADA"])
-chain = st.selectbox("Select Chain", ["ethereum", "polygon"])
-from_timestamp = st.number_input("From Timestamp", min_value=0)
-to_timestamp = st.number_input("To Timestamp", min_value=0)
-interval = st.selectbox("Select Interval", ["1m", "5m", "1h", "1d"])
+# --- Signals ---
+def add_signals(df, window=5, buy_thr=0.6, sell_thr=0.4):
+    df = df.copy()
+    df["return"] = df["price"].pct_change()
+    df["momentum"] = df["price"].pct_change(periods=window)
+    df["prob_up"] = 1 / (1 + np.exp(-10 * df["momentum"].fillna(0)))
+    df["signal"] = 0
+    df.loc[df["prob_up"] > buy_thr, "signal"] = 1
+    df.loc[df["prob_up"] < sell_thr, "signal"] = -1
+    return df
 
-api_choice = st.radio("Choose API", ["Moralis", "Syve"])
+def backtest(df):
+    df = df.copy()
+    df["strategy_return"] = df["signal"].shift(1) * df["return"]
+    df["cumulative"] = (1 + df["strategy_return"].fillna(0)).cumprod()
+    return df
 
-if st.button("Fetch Data"):
-    if api_choice == "Moralis":
-        data = fetch_moralis_data(token, chain, from_timestamp, to_timestamp, interval)
-    else:
-        data = fetch_syve_data(token, chain, from_timestamp, to_timestamp, interval)
+# --- Run ---
+df = fetch_coingecko_data(COINS[SELECTED_COIN])
 
-    if data:
-        df = pd.DataFrame(data)
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-        chart = alt.Chart(df).mark_line().encode(
-            x='timestamp:T',
-            y='close:Q'
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.error("Failed to fetch data.")
+if df.empty:
+    st.warning("No data available.")
+else:
+    df = add_signals(df)
+    df = backtest(df)
+
+    # Price + signals
+    base = alt.Chart(df).encode(x="timestamp:T")
+    price_line = base.mark_line().encode(y="price:Q")
+    buy_markers = base.mark_point(color="green", size=80).encode(y="price:Q").transform_filter("datum.signal == 1")
+    sell_markers = base.mark_point(color="red", size=80).encode(y="price:Q").transform_filter("datum.signal == -1")
+    st.altair_chart(price_line + buy_markers + sell_markers, use_container_width=True)
+
+    # Cumulative returns
+    cum_chart = alt.Chart(df).mark_line(color="purple").encode(
+        x="timestamp:T",
+        y="cumulative:Q"
+    ).properties(title="Cumulative Strategy Returns")
+    st.altair_chart(cum_chart, use_container_width=True)
