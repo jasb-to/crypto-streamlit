@@ -4,19 +4,16 @@ import pandas as pd
 import altair as alt
 import numpy as np
 
-st.title("AI16Z & ADA Trading Signals (CoinGecko Free API)")
+st.title("ADA Trading Signals (CoinGecko Free API)")
 
 # --- Config ---
-COINS = {
-    "AI16Z": "ai16z",
-    "ADA": "cardano"
-}
-SELECTED_COIN = "AI16Z"  # change to "ADA" if desired
+COIN_ID = "cardano"  # Cardano / ADA
+VS_CURRENCY = "usd"
 
 # --- Fetch OHLCV from CoinGecko ---
 def fetch_coingecko_data(coin_id):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    params = {"vs_currency": "usd", "days": "max", "interval": "daily"}
+    params = {"vs_currency": VS_CURRENCY, "days": "max", "interval": "daily"}
     response = requests.get(url, params=params)
     if response.status_code != 200:
         st.error(f"Error fetching {coin_id}: {response.status_code}")
@@ -48,7 +45,7 @@ def backtest(df):
     return df
 
 # --- Run ---
-df = fetch_coingecko_data(COINS[SELECTED_COIN])
+df = fetch_coingecko_data(COIN_ID)
 
 if df.empty:
     st.warning("No data available.")
